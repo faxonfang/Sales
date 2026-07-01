@@ -104,6 +104,9 @@ def build_rows(master, mo_sheet, target_year, target_month):
         candidates = []
         for r in variant_rows:
             sku = mo_sheet.cell(row=r, column=MO_COLS["商品原廠編號"]).value
+            if not sku:
+                # 商品原廠編號空白代表這個規格已失效，不需要處理
+                continue
             item = master.get(sku)
             if not item:
                 missing_variants.append([
