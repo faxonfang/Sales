@@ -2,7 +2,7 @@
 """從總表產生 momo 摩天商城的改價批次檔。"""
 import argparse
 import math
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta
 
 import csv
 from collections import defaultdict
@@ -40,10 +40,17 @@ def month_bounds(year, month):
 def load_master_sheet(ws):
     headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
     col = {name: i + 1 for i, name in enumerate(headers) if name}
-    required = ["品號", "ERP成本", "XP價", "活動價", "促銷起日", "促銷訖日"]
+    required = ["品號", "ERP成本", "XP價", "活動折後價"]
     missing = [name for name in required if name not in col]
     if missing:
         raise ValueError(f"總表缺少必要欄位: {missing}")
+
+    # 總表裡「MOMO」這個欄位名稱重複出現兩次（AD欄的手動指定售價，
+    # 以及後面統計用的 MOMO 欄），用欄名查找會抓到錯的那一欄，
+    # 所以這裡改用固定欄位字母 AD 來讀取手動指定售價。
+    momo_override_col = column_index_from_string("AD")
+    if headers[momo_override_col - 1] != "MOMO":
+        raise ValueError("總表 AD 欄不是預期的「MOMO」欄，請確認欄位是否有異動")
 
     master = {}
     for r in range(2, ws.max_row + 1):
@@ -53,27 +60,18 @@ def load_master_sheet(ws):
         master[sku] = {
             "cost": ws.cell(row=r, column=col["ERP成本"]).value,
             "base_price": ws.cell(row=r, column=col["XP價"]).value,
-            "promo_price": ws.cell(row=r, column=col["活動價"]).value,
-            "promo_start": ws.cell(row=r, column=col["促銷起日"]).value,
-            "promo_end": ws.cell(row=r, column=col["促銷訖日"]).value,
+            "discounted_price": ws.cell(row=r, column=col["活動折後價"]).value,
+            "momo_override": ws.cell(row=r, column=momo_override_col).value,
         }
     return master
 
 
-def as_date(value):
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    return None
-
-
-def resolve_selling_price(item, target_first, target_last):
-    start = as_date(item["promo_start"])
-    end = as_date(item["promo_end"])
-    if start and end and item["promo_price"] is not None:
-        if start <= target_last and end >= target_first:
-            return item["promo_price"]
+def resolve_selling_price(item):
+    """售價優先順序：MOMO欄位手動指定價 > 活動折後價(V欄) > XP價（活動折後價空白時的備援）。"""
+    if item["momo_override"]:
+        return item["momo_override"]
+    if item["discounted_price"]:
+        return item["discounted_price"]
     return item["base_price"]
 
 
@@ -114,7 +112,7 @@ def build_rows(master, mo_sheet, target_year, target_month):
                     str(mo_sheet.cell(row=r, column=MO_COLS["商品名稱"]).value),
                 ])
                 continue
-            sell_price = resolve_selling_price(item, target_first, target_last)
+            sell_price = resolve_selling_price(item)
             if sell_price is None or item["cost"] is None:
                 continue
             candidates.append({"row": r, "item": item, "price": sell_price})
