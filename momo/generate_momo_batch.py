@@ -79,26 +79,35 @@ def build_rows(master, mo_sheet, target_year, target_month):
     """momo 批次檔以「商品編號」（母碼）為單位，一個母碼底下可能有多個規格
     （不同單品編號/原廠貨號），但只能提交一筆售價，所以先依商品編號分組，
     每組取所有規格算出來售價中最低的一筆代表整個商品編號。
+
+    只要商品編號底下「至少有一個規格」目前是進行中，這個商品編號就需要送出
+    改價；但取最低價比較時，進行中和暫時中斷的規格都要納入（只有永久中斷
+    才排除），因為暫時中斷之後可能隨時恢復銷售。
     """
     target_first, target_last = month_bounds(target_year, target_month)
     effective_date = f"{target_first.year}/{target_first.month}/{target_first.day}"
 
     groups = defaultdict(list)
+    active_parents = set()
     for r in range(2, mo_sheet.max_row + 1):
-        if mo_sheet.cell(row=r, column=MO_COLS["銷售狀況"]).value != "進行":
+        status = mo_sheet.cell(row=r, column=MO_COLS["銷售狀況"]).value
+        if status not in ("進行", "暫時中斷"):
             continue
         parent_id = mo_sheet.cell(row=r, column=MO_COLS["商品編號"]).value
         groups[parent_id].append(r)
+        if status == "進行":
+            active_parents.add(parent_id)
 
     stats = {
-        "active_parents": len(groups), "unmatched_parents": 0,
+        "active_parents": len(active_parents), "unmatched_parents": 0,
         "price_conflict_parents": 0, "no_cost_or_price": 0,
         "unchanged": 0, "output": 0,
     }
     rows = []
     missing_variants = []
 
-    for parent_id, variant_rows in groups.items():
+    for parent_id in active_parents:
+        variant_rows = groups[parent_id]
         candidates = []
         for r in variant_rows:
             sku = mo_sheet.cell(row=r, column=MO_COLS["商品原廠編號"]).value
